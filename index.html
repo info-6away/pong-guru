@@ -91,6 +91,65 @@ const keys = {};
 addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
 addEventListener("keyup",   e => { keys[e.key.toLowerCase()] = false; });
 
+// --- Guru Bounce ---
+const GURU_SIZE = 44, GURU_HIT = 30, BOOST = 1.4;
+const WISDOM = [
+  "Inner peace... outer chaos.",
+  "The paddle is an illusion.",
+  "Breathe in. Smash out.",
+  "You missed because you wanted to.",
+  "The ball knows.",
+  "No ego. Just Pong.",
+  "Guru says: skill issue.",
+];
+const guru = {
+  x: 0, y: 0,
+  visible: false,
+  hit: false,        // true while jumping after a hit
+  jumpY: 0,          // upward visual offset (px)
+  jumpVel: 0,        // jump velocity
+  nextAppear: 0,     // timestamp to next show
+  hideAt: 0,         // timestamp to auto-hide
+  msg: "",
+  msgUntil: 0,       // timestamp message fades out
+};
+let boostUntil = 0;  // timestamp boost ends (0 = inactive)
+
+function randGuruDelay() { return 10000 + Math.random() * 5000; } // 10-15s
+
+function showGuru(now) {
+  guru.visible = true;
+  guru.hit = false;
+  guru.jumpY = 0;
+  guru.jumpVel = 0;
+  guru.x = W / 2 + (Math.random() * 120 - 60);
+  guru.y = H / 2 + (Math.random() * 120 - 60);
+  guru.hideAt = now + 4000; // visible for ~4s if untouched
+}
+
+function hideGuru(now) {
+  guru.visible = false;
+  guru.nextAppear = now + randGuruDelay();
+}
+
+function hitGuru(now) {
+  guru.hit = true;
+  guru.jumpVel = -9;
+  guru.msg = WISDOM[Math.floor(Math.random() * WISDOM.length)];
+  guru.msgUntil = now + 1500;
+  guru.hideAt = now + 900; // hop, then leave
+  // Ball changes direction randomly, then speeds up for 3s
+  const speed = Math.hypot(ball.vx, ball.vy) || 6;
+  const angle = (Math.random() * 1.0 - 0.5) * 0.7;       // gentle vertical spread
+  const dir = Math.random() < 0.5 ? -1 : 1;
+  ball.vx = Math.cos(angle) * speed * dir;
+  ball.vy = Math.sin(angle) * speed;
+  if (boostUntil === 0) {                                // apply boost once
+    ball.vx *= BOOST; ball.vy *= BOOST;
+  }
+  boostUntil = now + 3000;
+}
+
 const scoreEl   = document.getElementById("score");
 const messageEl = document.getElementById("message");
 const restartEl = document.getElementById("restart");
@@ -112,6 +171,11 @@ function reset() {
   restartEl.style.display = "none";
   left.y = right.y = H / 2 - PADDLE_H / 2;
   resetBall(Math.random() < 0.5 ? -1 : 1);
+  guru.visible = false;
+  guru.hit = false;
+  guru.msgUntil = 0;
+  guru.nextAppear = performance.now() + randGuruDelay();
+  boostUntil = 0;
   updateScore();
 }
 
@@ -126,8 +190,25 @@ function hitsPaddle(p) {
          ball.y + BALL_SIZE > p.y;
 }
 
-function update() {
+function update(now) {
   if (!running) return;
+
+  // End of speed boost -> return to normal
+  if (boostUntil !== 0 && now >= boostUntil) {
+    ball.vx /= BOOST; ball.vy /= BOOST;
+    boostUntil = 0;
+  }
+
+  // Guru appear / hide scheduling (only one event at a time)
+  if (!guru.visible && now >= guru.nextAppear) showGuru(now);
+  if (guru.visible && now >= guru.hideAt) hideGuru(now);
+
+  // Guru jump animation
+  if (guru.hit) {
+    guru.jumpVel += 0.6;          // gravity
+    guru.jumpY += guru.jumpVel;
+    if (guru.jumpY > 0) { guru.jumpY = 0; guru.jumpVel = 0; }
+  }
 
   // Paddle movement
   if (keys["w"]) left.y  -= PADDLE_SPEED;
@@ -152,6 +233,14 @@ function update() {
   } else if (ball.vx > 0 && hitsPaddle(right)) {
     ball.x = right.x - BALL_SIZE;
     bounce(right);
+  }
+
+  // Guru collision (only while floating, not already hit)
+  if (guru.visible && !guru.hit) {
+    const bx = ball.x + BALL_SIZE / 2, by = ball.y + BALL_SIZE / 2;
+    if (Math.abs(bx - guru.x) < GURU_HIT && Math.abs(by - guru.y) < GURU_HIT) {
+      hitGuru(now);
+    }
   }
 
   // Scoring
@@ -192,18 +281,43 @@ function draw() {
   ctx.fillRect(left.x,  left.y,  PADDLE_W, PADDLE_H);
   ctx.fillRect(right.x, right.y, PADDLE_W, PADDLE_H);
 
-  // Ball
-  if (running) ctx.fillRect(ball.x, ball.y, BALL_SIZE, BALL_SIZE);
+  // Ball (white, or a glowing accent while boosted)
+  if (running) {
+    ctx.fillStyle = boostUntil !== 0 ? "#ffd23f" : "#fff";
+    ctx.fillRect(ball.x, ball.y, BALL_SIZE, BALL_SIZE);
+    ctx.fillStyle = "#fff";
+  }
+
+  // Guru
+  if (guru.visible) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = GURU_SIZE + "px serif";
+    ctx.fillText("🧘", guru.x, guru.y + guru.jumpY);
+  }
+
+  // Wisdom message above the guru, fading out
+  if (guru.msgUntil > performance.now()) {
+    const alpha = Math.min(1, (guru.msgUntil - performance.now()) / 1500);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = "#ffd23f";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.font = "18px 'Courier New', monospace";
+    ctx.fillText(guru.msg, guru.x, guru.y - GURU_SIZE / 2 - 8 + guru.jumpY);
+    ctx.restore();
+  }
 }
 
-function loop() {
-  update();
+function loop(now) {
+  update(now);
   draw();
   requestAnimationFrame(loop);
 }
 
 reset();
-loop();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
