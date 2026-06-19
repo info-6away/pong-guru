@@ -2,16 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>pong.guru</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
     height: 100%;
     background: #000;
     color: #fff;
     font-family: "Courier New", monospace;
     overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
   }
   #wrap {
     height: 100%;
@@ -19,48 +22,78 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 16px;
+    gap: 10px;
+    padding: 8px;
   }
   #score {
-    font-size: 48px;
+    font-size: clamp(28px, 7vw, 48px);
     letter-spacing: 8px;
-    user-select: none;
+    font-weight: bold;
   }
   canvas {
     background: #000;
     border: 2px solid #fff;
+    aspect-ratio: 8 / 5;
+    width: min(96vw, calc(74vh * 8 / 5));
+    height: auto;
+    touch-action: none;
     image-rendering: pixelated;
   }
   #message {
-    font-size: 28px;
-    min-height: 34px;
-    letter-spacing: 4px;
+    font-size: clamp(18px, 5vw, 28px);
+    min-height: 30px;
+    letter-spacing: 3px;
     text-transform: uppercase;
   }
-  #restart {
-    display: none;
+  .btn {
     font-family: inherit;
-    font-size: 20px;
+    font-size: 18px;
     color: #000;
     background: #fff;
     border: none;
-    padding: 10px 24px;
+    padding: 12px 22px;
     cursor: pointer;
     letter-spacing: 2px;
+    border-radius: 4px;
+    min-height: 46px;
   }
-  #restart:hover { background: #ccc; }
-  #hint { font-size: 14px; opacity: 0.5; letter-spacing: 2px; }
-  #mobile {
+  .btn:active { background: #ccc; }
+  #restart { display: none; }
+  #hint { font-size: clamp(11px, 3vw, 14px); opacity: 0.5; letter-spacing: 1px; text-align: center; }
+
+  /* gear */
+  #gear {
+    position: fixed; top: 10px; right: 10px;
+    font-size: 16px; padding: 8px 14px; z-index: 10;
+  }
+
+  /* settings modal */
+  #settings {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.92);
     display: none;
-    padding: 40px;
-    text-align: center;
-    font-size: 22px;
-    letter-spacing: 2px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    z-index: 20;
+    padding: 20px;
   }
-  @media (hover: none) and (pointer: coarse) {
-    #wrap { display: none; }
-    #mobile { display: block; }
+  #settings.open { display: flex; }
+  #settings h2 { letter-spacing: 4px; font-size: 26px; margin-bottom: 4px; }
+  .ctrl-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; width: min(92vw, 360px);
+    font-size: 16px; letter-spacing: 1px;
   }
+  .keybtn {
+    font-family: inherit; min-width: 110px; min-height: 48px;
+    font-size: 18px; color: #fff; background: #111;
+    border: 2px solid #fff; border-radius: 4px; cursor: pointer;
+    letter-spacing: 1px;
+  }
+  .keybtn.listening { background: #ffd23f; color: #000; border-color: #ffd23f; }
+  #settings .row-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -68,254 +101,350 @@
     <div id="score">0 : 0</div>
     <canvas id="game" width="800" height="500"></canvas>
     <div id="message"></div>
-    <button id="restart">Restart</button>
-    <div id="hint">P1: W / S &nbsp;&nbsp;&nbsp; P2: O / L</div>
+    <button id="restart" class="btn">Restart</button>
+    <div id="hint"></div>
   </div>
-  <div id="mobile">KEYBOARD REQUIRED<br><br>Play pong.guru on a device with a keyboard.</div>
+
+  <button id="gear" class="btn">⚙ Settings</button>
+
+  <div id="settings">
+    <h2>CONTROLS</h2>
+    <div class="ctrl-row"><span>Player 1 — Up</span><button class="keybtn" data-act="p1Up"></button></div>
+    <div class="ctrl-row"><span>Player 1 — Down</span><button class="keybtn" data-act="p1Down"></button></div>
+    <div class="ctrl-row"><span>Player 2 — Up</span><button class="keybtn" data-act="p2Up"></button></div>
+    <div class="ctrl-row"><span>Player 2 — Down</span><button class="keybtn" data-act="p2Down"></button></div>
+    <div class="row-actions">
+      <button id="resetCtrl" class="btn">Reset to Default</button>
+      <button id="closeSettings" class="btn">Done</button>
+    </div>
+    <div id="hint" style="opacity:.5">Click a key, then press the new key. Touch sides to play on mobile.</div>
+  </div>
 
 <script>
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const W = canvas.width, H = canvas.height;
 
-const PADDLE_W = 12, PADDLE_H = 90, PADDLE_SPEED = 6;
-const BALL_SIZE = 12, WIN_SCORE = 10;
+const PADDLE_W = 14, PADDLE_H = 90, BIG_H = 145, SMALL_H = 55;
+const BALL = 13, BASE_SPEED = 6, PADDLE_SPEED = 7, WIN_SCORE = 10;
+const ZEN_FACTOR = 0.45;
 
-const left  = { x: 20,           y: H / 2 - PADDLE_H / 2 };
-const right = { x: W - 20 - PADDLE_W, y: H / 2 - PADDLE_H / 2 };
+const left  = { x: 22,            y: H/2 - PADDLE_H/2, h: PADDLE_H };
+const right = { x: W - 22 - PADDLE_W, y: H/2 - PADDLE_H/2, h: PADDLE_H };
 const ball  = { x: 0, y: 0, vx: 0, vy: 0 };
 let scoreL = 0, scoreR = 0;
-let running = true;
+let running = true, paused = false;
+let lastToucher = null;            // 'left' | 'right'
 
+// ---- Controls (customizable + persisted) ----
+const DEFAULTS = { p1Up: "w", p1Down: "s", p2Up: "o", p2Down: "l" };
+let controls = loadControls();
 const keys = {};
-addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
-addEventListener("keyup",   e => { keys[e.key.toLowerCase()] = false; });
+let capturing = null;              // data-act currently waiting for a key
 
-// --- Guru Bounce ---
-const GURU_SIZE = 44, GURU_HIT = 30, BOOST = 1.4;
-const WISDOM = [
-  "Inner peace... outer chaos.",
-  "The paddle is an illusion.",
-  "Breathe in. Smash out.",
-  "You missed because you wanted to.",
-  "The ball knows.",
-  "No ego. Just Pong.",
-  "Guru says: skill issue.",
-];
+function loadControls() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("pong.guru.controls"));
+    if (saved && saved.p1Up && saved.p1Down && saved.p2Up && saved.p2Down) return saved;
+  } catch (e) {}
+  return { ...DEFAULTS };
+}
+function saveControls() {
+  try { localStorage.setItem("pong.guru.controls", JSON.stringify(controls)); } catch (e) {}
+}
+function keyLabel(k) {
+  if (!k) return "—";
+  if (k === " ") return "Space";
+  if (k.startsWith("arrow")) return { arrowup:"↑", arrowdown:"↓", arrowleft:"←", arrowright:"→" }[k] || k;
+  return k.length === 1 ? k.toUpperCase() : k.toUpperCase();
+}
+
+// ---- Guru Chaos ----
 const guru = {
-  x: 0, y: 0,
-  visible: false,
-  hit: false,        // true while jumping after a hit
-  jumpY: 0,          // upward visual offset (px)
-  jumpVel: 0,        // jump velocity
-  nextAppear: 0,     // timestamp to next show
-  hideAt: 0,         // timestamp to auto-hide
-  msg: "",
-  msgUntil: 0,       // timestamp message fades out
+  x: 0, y: 0, visible: false,
+  nextAppear: 0, hideAt: 0,
+  msg: "", msgUntil: 0, hitAt: 0,
 };
-let boostUntil = 0;  // timestamp boost ends (0 = inactive)
+let effect = null;                 // { type, until } — only one at a time
+let flashUntil = 0;
+const EFFECTS = ["blessing", "curse", "karma", "zen", "flash"];
+const MSG = {
+  blessing: "Blessed!", curse: "Cursed!", karma: "Karma!",
+  zen: "Breathe.", flash: "No ego.",
+};
+function randDelay() { return 10000 + Math.random() * 5000; } // 10–15s
 
-function randGuruDelay() { return 10000 + Math.random() * 5000; } // 10-15s
-
-function showGuru(now) {
-  guru.visible = true;
-  guru.hit = false;
-  guru.jumpY = 0;
-  guru.jumpVel = 0;
-  guru.x = W / 2 + (Math.random() * 120 - 60);
-  guru.y = H / 2 + (Math.random() * 120 - 60);
-  guru.hideAt = now + 4000; // visible for ~4s if untouched
-}
-
-function hideGuru(now) {
-  guru.visible = false;
-  guru.nextAppear = now + randGuruDelay();
-}
-
-function hitGuru(now) {
-  guru.hit = true;
-  guru.jumpVel = -9;
-  guru.msg = WISDOM[Math.floor(Math.random() * WISDOM.length)];
-  guru.msgUntil = now + 1500;
-  guru.hideAt = now + 900; // hop, then leave
-  // Ball changes direction randomly, then speeds up for 3s
-  const speed = Math.hypot(ball.vx, ball.vy) || 6;
-  const angle = (Math.random() * 1.0 - 0.5) * 0.7;       // gentle vertical spread
-  const dir = Math.random() < 0.5 ? -1 : 1;
-  ball.vx = Math.cos(angle) * speed * dir;
-  ball.vy = Math.sin(angle) * speed;
-  if (boostUntil === 0) {                                // apply boost once
-    ball.vx *= BOOST; ball.vy *= BOOST;
-  }
-  boostUntil = now + 3000;
-}
-
+// ---- DOM ----
 const scoreEl   = document.getElementById("score");
 const messageEl = document.getElementById("message");
 const restartEl = document.getElementById("restart");
-restartEl.addEventListener("click", reset);
+const hintEl    = document.querySelector("#wrap #hint");
+const gearEl    = document.getElementById("gear");
+const settingsEl= document.getElementById("settings");
 
+restartEl.addEventListener("click", reset);
+gearEl.addEventListener("click", () => openSettings(true));
+document.getElementById("closeSettings").addEventListener("click", () => openSettings(false));
+document.getElementById("resetCtrl").addEventListener("click", () => {
+  controls = { ...DEFAULTS }; saveControls(); capturing = null; refreshKeyButtons(); updateHint();
+});
+document.querySelectorAll(".keybtn").forEach(b => {
+  b.addEventListener("click", () => {
+    capturing = b.dataset.act;
+    refreshKeyButtons();
+  });
+});
+
+function openSettings(open) {
+  settingsEl.classList.toggle("open", open);
+  paused = open;
+  capturing = null;
+  if (open) refreshKeyButtons();
+}
+function refreshKeyButtons() {
+  document.querySelectorAll(".keybtn").forEach(b => {
+    const act = b.dataset.act;
+    b.textContent = capturing === act ? "press a key…" : keyLabel(controls[act]);
+    b.classList.toggle("listening", capturing === act);
+  });
+}
+function updateHint() {
+  hintEl.textContent =
+    "P1 " + keyLabel(controls.p1Up) + "/" + keyLabel(controls.p1Down) +
+    "   •   P2 " + keyLabel(controls.p2Up) + "/" + keyLabel(controls.p2Down) +
+    "   •   Mobile: touch each side  (landscape recommended)";
+}
+
+// ---- Input ----
+addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  if (capturing) {                 // remapping a control
+    e.preventDefault();
+    // avoid assigning the same key to two actions
+    for (const a in controls) if (controls[a] === k) controls[a] = null;
+    controls[capturing] = k;
+    capturing = null;
+    saveControls(); refreshKeyButtons(); updateHint();
+    return;
+  }
+  keys[k] = true;
+});
+addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+// Touch: left half -> P1, right half -> P2, drag to position paddle
+function handleTouch(e) {
+  if (paused) return;
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const scaleY = H / rect.height;
+  for (const t of e.touches) {
+    const y = (t.clientY - rect.top) * scaleY;
+    const p = (t.clientX - rect.left) < rect.width / 2 ? left : right;
+    p.y = Math.max(0, Math.min(H - p.h, y - p.h / 2));
+  }
+}
+canvas.addEventListener("touchstart", handleTouch, { passive: false });
+canvas.addEventListener("touchmove",  handleTouch, { passive: false });
+
+// ---- Game logic ----
 function resetBall(dir) {
-  ball.x = W / 2 - BALL_SIZE / 2;
-  ball.y = H / 2 - BALL_SIZE / 2;
-  const angle = (Math.random() * 0.5 - 0.25) * Math.PI; // -45..45 deg
-  const speed = 6;
-  ball.vx = Math.cos(angle) * speed * dir;
-  ball.vy = Math.sin(angle) * speed;
+  ball.x = W/2 - BALL/2;
+  ball.y = H/2 - BALL/2;
+  const angle = (Math.random() * 0.5 - 0.25) * Math.PI;
+  ball.vx = Math.cos(angle) * BASE_SPEED * dir;
+  ball.vy = Math.sin(angle) * BASE_SPEED;
 }
 
 function reset() {
   scoreL = 0; scoreR = 0;
   running = true;
+  lastToucher = null;
   messageEl.textContent = "";
   restartEl.style.display = "none";
-  left.y = right.y = H / 2 - PADDLE_H / 2;
+  left.y = right.y = H/2 - PADDLE_H/2;
+  left.h = right.h = PADDLE_H;
+  effect = null; flashUntil = 0;
+  guru.visible = false; guru.msgUntil = 0;
+  guru.nextAppear = performance.now() + randDelay();
   resetBall(Math.random() < 0.5 ? -1 : 1);
-  guru.visible = false;
-  guru.hit = false;
-  guru.msgUntil = 0;
-  guru.nextAppear = performance.now() + randGuruDelay();
-  boostUntil = 0;
   updateScore();
 }
 
-function updateScore() {
-  scoreEl.textContent = scoreL + " : " + scoreR;
-}
+function updateScore() { scoreEl.textContent = scoreL + " : " + scoreR; }
 
 function hitsPaddle(p) {
-  return ball.x < p.x + PADDLE_W &&
-         ball.x + BALL_SIZE > p.x &&
-         ball.y < p.y + PADDLE_H &&
-         ball.y + BALL_SIZE > p.y;
+  return ball.x < p.x + PADDLE_W && ball.x + BALL > p.x &&
+         ball.y < p.y + p.h     && ball.y + BALL > p.y;
+}
+
+function bounce(p, side) {
+  ball.vx *= -1;
+  const offset = (ball.y + BALL/2) - (p.y + p.h/2);
+  ball.vy += (offset / (p.h/2)) * 3;
+  ball.vx *= 1.05;
+  ball.vx = Math.max(-13, Math.min(13, ball.vx));
+  lastToucher = side;
+}
+
+// ---- Guru effects ----
+function toucherPaddle()  { return lastToucher === "right" ? right : left; }
+function opponentPaddle() { return lastToucher === "left"  ? right : left; }
+
+function applyEffect(now) {
+  const type = EFFECTS[Math.floor(Math.random() * EFFECTS.length)];
+  let until = now;
+  if (type === "blessing") { toucherPaddle().h = BIG_H;   until = now + 5000; }
+  else if (type === "curse") { opponentPaddle().h = SMALL_H; until = now + 5000; }
+  else if (type === "karma") { until = now + 4000; }
+  else if (type === "zen")   { ball.vx *= ZEN_FACTOR; ball.vy *= ZEN_FACTOR; until = now + 3000; }
+  else if (type === "flash") { flashUntil = now + 1000; until = now + 1000; }
+  effect = { type, until };
+  guru.msg = MSG[type];
+  guru.msgUntil = now + 1200;
+}
+
+function clearEffect() {
+  if (!effect) return;
+  if (effect.type === "zen") { ball.vx /= ZEN_FACTOR; ball.vy /= ZEN_FACTOR; }
+  left.h = right.h = PADDLE_H;     // safe: only one effect runs at a time
+  // keep paddles inside bounds after resize
+  left.y  = Math.min(left.y,  H - left.h);
+  right.y = Math.min(right.y, H - right.h);
+  effect = null;
 }
 
 function update(now) {
-  if (!running) return;
+  if (paused || !running) return;
 
-  // End of speed boost -> return to normal
-  if (boostUntil !== 0 && now >= boostUntil) {
-    ball.vx /= BOOST; ball.vy /= BOOST;
-    boostUntil = 0;
+  if (effect && now >= effect.until) clearEffect();
+
+  // Guru schedule
+  if (!guru.visible && now >= guru.nextAppear) {
+    guru.visible = true;
+    guru.x = W/2 + (Math.random() * 100 - 50);
+    guru.y = 120 + Math.random() * (H - 240);
+    guru.hideAt = now + 3500;
+  }
+  if (guru.visible && now >= guru.hideAt) {
+    guru.visible = false;
+    guru.nextAppear = now + randDelay();
   }
 
-  // Guru appear / hide scheduling (only one event at a time)
-  if (!guru.visible && now >= guru.nextAppear) showGuru(now);
-  if (guru.visible && now >= guru.hideAt) hideGuru(now);
+  // Keyboard movement
+  if (keys[controls.p1Up])   left.y  -= PADDLE_SPEED;
+  if (keys[controls.p1Down]) left.y  += PADDLE_SPEED;
+  if (keys[controls.p2Up])   right.y -= PADDLE_SPEED;
+  if (keys[controls.p2Down]) right.y += PADDLE_SPEED;
+  left.y  = Math.max(0, Math.min(H - left.h,  left.y));
+  right.y = Math.max(0, Math.min(H - right.h, right.y));
 
-  // Guru jump animation
-  if (guru.hit) {
-    guru.jumpVel += 0.6;          // gravity
-    guru.jumpY += guru.jumpVel;
-    if (guru.jumpY > 0) { guru.jumpY = 0; guru.jumpVel = 0; }
-  }
-
-  // Paddle movement
-  if (keys["w"]) left.y  -= PADDLE_SPEED;
-  if (keys["s"]) left.y  += PADDLE_SPEED;
-  if (keys["o"]) right.y -= PADDLE_SPEED;
-  if (keys["l"]) right.y += PADDLE_SPEED;
-  left.y  = Math.max(0, Math.min(H - PADDLE_H, left.y));
-  right.y = Math.max(0, Math.min(H - PADDLE_H, right.y));
-
-  // Ball movement
+  // Ball
   ball.x += ball.vx;
   ball.y += ball.vy;
+  if (effect && effect.type === "karma") ball.vy += (Math.random() - 0.5) * 1.4; // gentle wobble
 
-  // Top / bottom walls
-  if (ball.y <= 0) { ball.y = 0; ball.vy *= -1; }
-  if (ball.y + BALL_SIZE >= H) { ball.y = H - BALL_SIZE; ball.vy *= -1; }
+  // Walls
+  if (ball.y <= 0) { ball.y = 0; ball.vy = Math.abs(ball.vy); }
+  if (ball.y + BALL >= H) { ball.y = H - BALL; ball.vy = -Math.abs(ball.vy); }
 
-  // Paddle collisions
-  if (ball.vx < 0 && hitsPaddle(left)) {
-    ball.x = left.x + PADDLE_W;
-    bounce(left);
-  } else if (ball.vx > 0 && hitsPaddle(right)) {
-    ball.x = right.x - BALL_SIZE;
-    bounce(right);
-  }
+  // Paddles
+  if (ball.vx < 0 && hitsPaddle(left))  { ball.x = left.x + PADDLE_W; bounce(left, "left"); }
+  else if (ball.vx > 0 && hitsPaddle(right)) { ball.x = right.x - BALL; bounce(right, "right"); }
 
-  // Guru collision (only while floating, not already hit)
-  if (guru.visible && !guru.hit) {
-    const bx = ball.x + BALL_SIZE / 2, by = ball.y + BALL_SIZE / 2;
-    if (Math.abs(bx - guru.x) < GURU_HIT && Math.abs(by - guru.y) < GURU_HIT) {
-      hitGuru(now);
+  // Guru collision -> one effect at a time
+  if (guru.visible && !effect) {
+    const bx = ball.x + BALL/2, by = ball.y + BALL/2;
+    if (Math.abs(bx - guru.x) < 28 && Math.abs(by - guru.y) < 28) {
+      guru.hitAt = now;
+      guru.visible = false;
+      guru.nextAppear = now + randDelay();
+      applyEffect(now);
     }
   }
 
   // Scoring
-  if (ball.x + BALL_SIZE < 0) { scoreR++; afterScore(1); }
-  else if (ball.x > W)        { scoreL++; afterScore(-1); }
-}
-
-function bounce(p) {
-  ball.vx *= -1;
-  // Add angle based on where the ball hit the paddle
-  const offset = (ball.y + BALL_SIZE / 2) - (p.y + PADDLE_H / 2);
-  ball.vy += (offset / (PADDLE_H / 2)) * 3;
-  // Slight speedup, capped
-  ball.vx *= 1.05;
-  ball.vx = Math.max(-12, Math.min(12, ball.vx));
+  if (ball.x + BALL < 0) { scoreR++; afterScore(1); }
+  else if (ball.x > W)   { scoreL++; afterScore(-1); }
 }
 
 function afterScore(dir) {
   updateScore();
   if (scoreL >= WIN_SCORE || scoreR >= WIN_SCORE) {
     running = false;
+    if (effect) clearEffect();
     messageEl.textContent = (scoreL >= WIN_SCORE ? "Player 1" : "Player 2") + " wins!";
-    restartEl.style.display = "block";
+    restartEl.style.display = "inline-block";
   } else {
     resetBall(dir);
   }
 }
 
-function draw() {
+// ---- Render ----
+function draw(now) {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, W, H);
 
-  // Center dashed line
+  // center line
   ctx.fillStyle = "#fff";
-  for (let y = 0; y < H; y += 30) ctx.fillRect(W / 2 - 1, y, 2, 16);
+  for (let y = 0; y < H; y += 30) ctx.fillRect(W/2 - 1, y, 2, 16);
 
-  // Paddles
-  ctx.fillRect(left.x,  left.y,  PADDLE_W, PADDLE_H);
-  ctx.fillRect(right.x, right.y, PADDLE_W, PADDLE_H);
+  // side hints (faint) for touch
+  ctx.globalAlpha = 0.18;
+  ctx.font = "16px 'Courier New', monospace";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";  ctx.fillText("P1", 10, 8);
+  ctx.textAlign = "right"; ctx.fillText("P2", W - 10, 8);
+  ctx.globalAlpha = 1;
 
-  // Ball (white, or a glowing accent while boosted)
+  // paddles
+  ctx.fillRect(left.x,  left.y,  PADDLE_W, left.h);
+  ctx.fillRect(right.x, right.y, PADDLE_W, right.h);
+
+  // ball (tinted while an effect is live)
   if (running) {
-    ctx.fillStyle = boostUntil !== 0 ? "#ffd23f" : "#fff";
-    ctx.fillRect(ball.x, ball.y, BALL_SIZE, BALL_SIZE);
+    ctx.fillStyle = effect ? "#ffd23f" : "#fff";
+    ctx.fillRect(ball.x, ball.y, BALL, BALL);
     ctx.fillStyle = "#fff";
   }
 
-  // Guru
+  // guru
   if (guru.visible) {
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = GURU_SIZE + "px serif";
-    ctx.fillText("🧘", guru.x, guru.y + guru.jumpY);
+    const bob = Math.sin(now / 200) * 4;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "40px serif";
+    ctx.fillText("🧘", guru.x, guru.y + bob);
   }
 
-  // Wisdom message above the guru, fading out
-  if (guru.msgUntil > performance.now()) {
-    const alpha = Math.min(1, (guru.msgUntil - performance.now()) / 1500);
+  // wise message
+  if (guru.msgUntil > now) {
+    const a = Math.min(1, (guru.msgUntil - now) / 1200);
     ctx.save();
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = a;
     ctx.fillStyle = "#ffd23f";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "alphabetic";
-    ctx.font = "18px 'Courier New', monospace";
-    ctx.fillText(guru.msg, guru.x, guru.y - GURU_SIZE / 2 - 8 + guru.jumpY);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "22px 'Courier New', monospace";
+    ctx.fillText(guru.msg, W/2, 40);
+    ctx.restore();
+  }
+
+  // enlightenment flash
+  if (flashUntil > now) {
+    ctx.save();
+    ctx.globalAlpha = 0.5 * (flashUntil - now) / 1000;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, W, H);
     ctx.restore();
   }
 }
 
 function loop(now) {
   update(now);
-  draw();
+  draw(now);
   requestAnimationFrame(loop);
 }
 
+refreshKeyButtons();
+updateHint();
 reset();
 requestAnimationFrame(loop);
 </script>
