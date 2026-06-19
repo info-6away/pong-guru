@@ -109,7 +109,23 @@
     letter-spacing: 1px;
   }
   .keybtn.listening { background: #ffd23f; color: #000; border-color: #ffd23f; }
+  .seg { display: flex; gap: 8px; }
+  .seg button {
+    font-family: inherit; min-width: 46px; min-height: 46px;
+    font-size: 17px; color: #fff; background: #111;
+    border: 2px solid #fff; border-radius: 4px; cursor: pointer;
+  }
+  .seg button.active { background: #ffd23f; color: #000; border-color: #ffd23f; }
+  .helper { opacity: 0.5; font-size: 13px; letter-spacing: 1px; }
   #settings .row-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+
+  /* compact layout for short landscape screens (mobile) */
+  @media (orientation: landscape) and (max-height: 540px) {
+    #wrap { gap: 6px; padding: 4px; }
+    #score { font-size: clamp(22px, 6vh, 34px); letter-spacing: 4px; }
+    canvas { width: min(96vw, calc(64vh * 8 / 5)); }
+    #wrap > #hint { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -137,6 +153,15 @@
     <div class="ctrl-row"><span>Player 1 — Down</span><button class="keybtn" data-act="p1Down"></button></div>
     <div class="ctrl-row"><span>Player 2 — Up</span><button class="keybtn" data-act="p2Up"></button></div>
     <div class="ctrl-row"><span>Player 2 — Down</span><button class="keybtn" data-act="p2Down"></button></div>
+    <div class="ctrl-row"><span>Guru Count</span>
+      <div id="guruSeg" class="seg">
+        <button data-n="1">1</button>
+        <button data-n="2">2</button>
+        <button data-n="3">3</button>
+        <button data-n="5">5</button>
+      </div>
+    </div>
+    <div class="helper">More gurus = more chaos</div>
     <div class="row-actions">
       <button id="resetCtrl" class="btn">Reset to Default</button>
       <button id="closeSettings" class="btn">Done</button>
@@ -221,11 +246,39 @@ function keyLabel(k) {
 }
 
 // ---- Guru Chaos ----
-const guru = {
-  x: 0, y: 0, visible: false,
-  nextAppear: 0, hideAt: 0,
-  msg: "", msgUntil: 0, hitAt: 0,
-};
+const chaos = { active: false, nextAppear: 0, hideAt: 0, msg: "", msgUntil: 0 };
+let gurus = [];                    // [{x,y}] currently-visible gurus (share one window)
+const GURU_R = 28;                 // half hit-box
+
+let guruCount = loadGuruCount();
+function loadGuruCount() {
+  try {
+    const n = parseInt(localStorage.getItem("pong.guru.count"), 10);
+    if ([1, 2, 3, 5].includes(n)) return n;
+  } catch (e) {}
+  return 3;                        // default
+}
+function saveGuruCount() {
+  try { localStorage.setItem("pong.guru.count", String(guruCount)); } catch (e) {}
+}
+
+// Place gurus in the middle third, away from paddles, off the ball, no overlap
+function spawnGurus(now) {
+  gurus = [];
+  const minDist = 66, bx = ball.x + BALL/2, by = ball.y + BALL/2;
+  let tries = 0;
+  while (gurus.length < guruCount && tries < 400) {
+    tries++;
+    const x = W * 0.30 + Math.random() * W * 0.40;
+    const y = 110 + Math.random() * (H - 220);
+    if (Math.hypot(x - bx, y - by) < 80) continue;                       // not on the ball
+    if (gurus.some(g => Math.hypot(x - g.x, y - g.y) < minDist)) continue; // no overlap
+    gurus.push({ x, y });
+  }
+  chaos.active = true;
+  chaos.hideAt = now + 3500;
+}
+
 let effect = null;                 // { type, until } — only one at a time
 let flashUntil = 0;
 const EFFECTS = ["blessing", "curse", "karma", "zen", "flash"];
@@ -254,7 +307,7 @@ function startGame() {
   ensureAudio();                          // unlock audio inside the gesture
   started = true;
   startEl.classList.add("hidden");
-  guru.nextAppear = performance.now() + randDelay();
+  chaos.nextAppear = performance.now() + randDelay();
 }
 function setSound(on) {
   soundOn = on;
@@ -273,12 +326,24 @@ document.querySelectorAll(".keybtn").forEach(b => {
     refreshKeyButtons();
   });
 });
+document.querySelectorAll("#guruSeg button").forEach(b => {
+  b.addEventListener("click", () => {
+    guruCount = parseInt(b.dataset.n, 10);
+    saveGuruCount();
+    refreshGuruSeg();
+  });
+});
+function refreshGuruSeg() {
+  document.querySelectorAll("#guruSeg button").forEach(b => {
+    b.classList.toggle("active", parseInt(b.dataset.n, 10) === guruCount);
+  });
+}
 
 function openSettings(open) {
   settingsEl.classList.toggle("open", open);
   paused = open;
   capturing = null;
-  if (open) refreshKeyButtons();
+  if (open) { refreshKeyButtons(); refreshGuruSeg(); }
 }
 function refreshKeyButtons() {
   document.querySelectorAll(".keybtn").forEach(b => {
@@ -343,8 +408,8 @@ function reset() {
   left.y = right.y = H/2 - PADDLE_H/2;
   left.h = right.h = PADDLE_H;
   effect = null; flashUntil = 0;
-  guru.visible = false; guru.msgUntil = 0;
-  guru.nextAppear = performance.now() + randDelay();
+  chaos.active = false; chaos.msgUntil = 0; gurus = [];
+  chaos.nextAppear = performance.now() + randDelay();
   resetBall(Math.random() < 0.5 ? -1 : 1);
   updateScore();
 }
@@ -379,8 +444,8 @@ function applyEffect(now) {
   else if (type === "zen")   { ball.vx *= ZEN_FACTOR; ball.vy *= ZEN_FACTOR; until = now + 3000; }
   else if (type === "flash") { flashUntil = now + 1000; until = now + 1000; }
   effect = { type, until };
-  guru.msg = MSG[type];
-  guru.msgUntil = now + 1200;
+  chaos.msg = MSG[type];
+  chaos.msgUntil = now + 1200;
 }
 
 function clearEffect() {
@@ -398,16 +463,11 @@ function update(now) {
 
   if (effect && now >= effect.until) clearEffect();
 
-  // Guru schedule
-  if (!guru.visible && now >= guru.nextAppear) {
-    guru.visible = true;
-    guru.x = W/2 + (Math.random() * 100 - 50);
-    guru.y = 120 + Math.random() * (H - 240);
-    guru.hideAt = now + 3500;
-  }
-  if (guru.visible && now >= guru.hideAt) {
-    guru.visible = false;
-    guru.nextAppear = now + randDelay();
+  // Guru chaos appear / disappear (all gurus share one window)
+  if (!chaos.active && now >= chaos.nextAppear) spawnGurus(now);
+  if (chaos.active && now >= chaos.hideAt) {
+    chaos.active = false; gurus = [];
+    chaos.nextAppear = now + randDelay();
   }
 
   // Keyboard movement
@@ -431,13 +491,12 @@ function update(now) {
   if (ball.vx < 0 && hitsPaddle(left))  { ball.x = left.x + PADDLE_W; bounce(left, "left"); }
   else if (ball.vx > 0 && hitsPaddle(right)) { ball.x = right.x - BALL; bounce(right, "right"); }
 
-  // Guru collision -> one effect at a time
-  if (guru.visible && !effect) {
+  // Guru collision -> one effect; remove ALL gurus, start cooldown
+  if (chaos.active && !effect) {
     const bx = ball.x + BALL/2, by = ball.y + BALL/2;
-    if (Math.abs(bx - guru.x) < 28 && Math.abs(by - guru.y) < 28) {
-      guru.hitAt = now;
-      guru.visible = false;
-      guru.nextAppear = now + randDelay();
+    if (gurus.some(g => Math.abs(bx - g.x) < GURU_R && Math.abs(by - g.y) < GURU_R)) {
+      chaos.active = false; gurus = [];
+      chaos.nextAppear = now + randDelay();
       shakeUntil = now + 300;            // small screen shake on chaos
       applyEffect(now);
       playGuru();
@@ -500,23 +559,23 @@ function draw(now) {
     ctx.fillStyle = "#fff";
   }
 
-  // guru
-  if (guru.visible) {
+  // gurus
+  if (chaos.active) {
     const bob = Math.sin(now / 200) * 4;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.font = "40px serif";
-    ctx.fillText("🧘", guru.x, guru.y + bob);
+    ctx.font = "38px serif";
+    for (const g of gurus) ctx.fillText("🧘", g.x, g.y + bob);
   }
 
   // wise message
-  if (guru.msgUntil > now) {
-    const a = Math.min(1, (guru.msgUntil - now) / 1200);
+  if (chaos.msgUntil > now) {
+    const a = Math.min(1, (chaos.msgUntil - now) / 1200);
     ctx.save();
     ctx.globalAlpha = a;
     ctx.fillStyle = "#ffd23f";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.font = "22px 'Courier New', monospace";
-    ctx.fillText(guru.msg, W/2, 40);
+    ctx.fillText(chaos.msg, W/2, 40);
     ctx.restore();
   }
 
@@ -539,6 +598,7 @@ function loop(now) {
 }
 
 refreshKeyButtons();
+refreshGuruSeg();
 updateHint();
 updateSoundBtn();
 reset();
