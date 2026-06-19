@@ -30,11 +30,23 @@
     font-weight: bold;
     flex: 0 0 auto;
   }
-  /* flexible middle region; canvas auto-fits it preserving aspect ratio */
-  #stage {
+  /* flexible middle region: grid holding [padL] [stage] [padR] (pads off on desktop) */
+  #play {
     flex: 1 1 auto;
     min-height: 0;
     width: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-areas: "stage";
+    place-items: center;
+    gap: 8px;
+  }
+  #stage {
+    grid-area: stage;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -42,15 +54,48 @@
   canvas {
     background: #000;
     border: 2px solid #fff;
-    /* intrinsic 800x500 ratio is preserved; scales DOWN to fit #stage.
+    /* JS (fitCanvas) sets explicit px size to fit #stage at the 800x500 ratio;
        element box == rendered size, so getBoundingClientRect stays exact for touch */
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
     touch-action: none;
     image-rendering: pixelated;
   }
+  /* touch control zones — subtle, hidden on desktop */
+  .pad {
+    display: none;
+    box-sizing: border-box;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 2px solid rgba(255,255,255,0.22);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.04);
+    color: rgba(255,255,255,0.42);
+    font-size: 18px;
+    letter-spacing: 2px;
+    touch-action: none;
+    user-select: none;
+  }
+  .pad .arrow { font-size: 24px; opacity: 0.55; }
+  #padL { grid-area: padL; }
+  #padR { grid-area: padR; }
+
+  /* landscape mobile: pads beside the canvas */
+  body.touch.landscape #play {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "padL stage padR";
+  }
+  body.touch.landscape .pad { display: flex; width: clamp(54px, 13vw, 120px); height: 100%; }
+
+  /* portrait mobile: pads below the canvas, side by side */
+  body.touch.portrait #play {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr auto;
+    grid-template-areas:
+      "stage stage"
+      "padL  padR";
+  }
+  body.touch.portrait .pad { display: flex; width: 100%; height: clamp(110px, 20vh, 200px); }
   #bottom {
     flex: 0 0 auto;
     display: flex;
@@ -173,7 +218,11 @@
 <body>
   <div id="wrap">
     <div id="score">0 : 0</div>
-    <div id="stage"><canvas id="game" width="800" height="500"></canvas></div>
+    <div id="play">
+      <div id="padL" class="pad"><span>P1</span><span class="arrow">↕</span></div>
+      <div id="stage"><canvas id="game" width="800" height="500"></canvas></div>
+      <div id="padR" class="pad"><span>P2</span><span class="arrow">↕</span></div>
+    </div>
     <div id="bottom">
       <div id="rotateHint">Rotate phone for best play</div>
       <div id="message"></div>
@@ -422,20 +471,40 @@ addEventListener("keydown", e => {
 });
 addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
 
-// Touch: left half -> P1, right half -> P2, drag to position paddle
+// Touch: dedicated P1/P2 zones outside the canvas (canvas halves are a fallback).
+// Maps each finger's Y within its zone to that paddle. Multi-touch works because
+// e.touches holds every active finger; rects come from getBoundingClientRect (live).
+const padLEl = document.getElementById("padL");
+const padREl = document.getElementById("padR");
+function inRect(r, t) {
+  return t.clientX >= r.left && t.clientX <= r.right &&
+         t.clientY >= r.top  && t.clientY <= r.bottom;
+}
+function visibleRect(el) {           // null if hidden (display:none -> offsetParent null)
+  return el.offsetParent ? el.getBoundingClientRect() : null;
+}
+function moveTo(p, clientY, rect) {
+  const y = (clientY - rect.top) * (H / rect.height);
+  p.y = Math.max(0, Math.min(H - p.h, y - p.h / 2));
+}
 function handleTouch(e) {
   if (paused) return;
-  e.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  const scaleY = H / rect.height;
+  const rl = visibleRect(padLEl), rr = visibleRect(padREl);
+  const rc = canvas.getBoundingClientRect();
+  let used = false;
   for (const t of e.touches) {
-    const y = (t.clientY - rect.top) * scaleY;
-    const p = (t.clientX - rect.left) < rect.width / 2 ? left : right;
-    p.y = Math.max(0, Math.min(H - p.h, y - p.h / 2));
+    if (rl && inRect(rl, t))      { moveTo(left,  t.clientY, rl); used = true; }
+    else if (rr && inRect(rr, t)) { moveTo(right, t.clientY, rr); used = true; }
+    else if (inRect(rc, t)) {       // fallback: touch directly on the canvas
+      moveTo((t.clientX - rc.left) < rc.width / 2 ? left : right, t.clientY, rc);
+      used = true;
+    }
   }
+  if (used) e.preventDefault();      // block scroll/zoom only when controlling a paddle
 }
-canvas.addEventListener("touchstart", handleTouch, { passive: false });
-canvas.addEventListener("touchmove",  handleTouch, { passive: false });
+const playEl = document.getElementById("play");
+playEl.addEventListener("touchstart", handleTouch, { passive: false });
+playEl.addEventListener("touchmove",  handleTouch, { passive: false });
 
 // ---- Game logic ----
 function resetBall(dir) {
