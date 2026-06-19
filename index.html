@@ -119,7 +119,17 @@
     gap: 16px; z-index: 30; text-align: center; padding: 20px;
   }
   #start.hidden { display: none; }
+  #start #logo {
+    width: clamp(140px, 40vw, 260px);
+    height: auto;
+    image-rendering: auto;
+    filter: drop-shadow(0 0 16px rgba(255,210,63,0.35));
+  }
   #start h1 { font-size: clamp(44px, 13vw, 88px); letter-spacing: 8px; }
+  /* compact the start screen on short landscape phones so it never clips */
+  body.touch.landscape #start { gap: 8px; }
+  body.touch.landscape #start #logo { width: clamp(90px, 22vh, 150px); }
+  body.touch.landscape #start h1 { font-size: clamp(28px, 9vh, 52px); }
   #start .sub { font-size: clamp(16px, 5vw, 24px); letter-spacing: 3px; }
   #start .ins { opacity: 0.55; letter-spacing: 2px; font-size: clamp(13px, 4vw, 16px); }
 
@@ -177,6 +187,7 @@
   <button id="fsBtn" class="btn">⛶ Fullscreen</button>
 
   <div id="start">
+    <img id="logo" src="logos/ponglogo.png" alt="Pong Guru logo">
     <h1>Pong Guru</h1>
     <div class="sub">First to 10 wins</div>
     <div class="ins">Hit the guru 🧘 for chaos</div>
