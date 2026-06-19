@@ -61,11 +61,27 @@
   #restart { display: none; }
   #hint { font-size: clamp(11px, 3vw, 14px); opacity: 0.5; letter-spacing: 1px; text-align: center; }
 
-  /* gear */
+  /* gear + sound */
   #gear {
     position: fixed; top: 10px; right: 10px;
     font-size: 16px; padding: 8px 14px; z-index: 10;
   }
+  #soundBtn {
+    position: fixed; top: 10px; left: 10px;
+    font-size: 16px; padding: 8px 14px; z-index: 10;
+  }
+
+  /* start screen */
+  #start {
+    position: fixed; inset: 0; background: #000;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 16px; z-index: 30; text-align: center; padding: 20px;
+  }
+  #start.hidden { display: none; }
+  #start h1 { font-size: clamp(44px, 13vw, 88px); letter-spacing: 8px; }
+  #start .sub { font-size: clamp(16px, 5vw, 24px); letter-spacing: 3px; }
+  #start .ins { opacity: 0.55; letter-spacing: 2px; font-size: clamp(13px, 4vw, 16px); }
 
   /* settings modal */
   #settings {
@@ -105,7 +121,15 @@
     <div id="hint"></div>
   </div>
 
+  <button id="soundBtn" class="btn">🔇 Sound</button>
   <button id="gear" class="btn">⚙ Settings</button>
+
+  <div id="start">
+    <h1>Pong Guru</h1>
+    <div class="sub">First to 10 wins</div>
+    <div class="ins">Hit the guru 🧘 for chaos</div>
+    <button id="startBtn" class="btn">Start Game</button>
+  </div>
 
   <div id="settings">
     <h2>CONTROLS</h2>
@@ -133,8 +157,45 @@ const left  = { x: 22,            y: H/2 - PADDLE_H/2, h: PADDLE_H };
 const right = { x: W - 22 - PADDLE_W, y: H/2 - PADDLE_H/2, h: PADDLE_H };
 const ball  = { x: 0, y: 0, vx: 0, vy: 0 };
 let scoreL = 0, scoreR = 0;
-let running = true, paused = false;
+let running = true, paused = false, started = false;
 let lastToucher = null;            // 'left' | 'right'
+let shakeUntil = 0;
+
+// ---- Sound (Web Audio beeps, no files) ----
+let soundOn = false, audioCtx = null;
+try { soundOn = localStorage.getItem("pong.guru.sound") === "on"; } catch (e) {}
+
+function ensureAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (e) {}
+}
+function beep(freq, dur, type = "square", gain = 0.06) {
+  if (!soundOn || !audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  const t = audioCtx.currentTime;
+  o.type = type; o.frequency.value = freq;
+  o.connect(g); g.connect(audioCtx.destination);
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.start(t); o.stop(t + dur);
+}
+function playPaddle() { beep(440, 0.05, "square", 0.05); }
+function playScore()  { beep(150, 0.28, "triangle", 0.08); }
+function playGuru() {                       // soft gong: two detuned sines, long decay
+  if (!soundOn || !audioCtx) return;
+  [392, 523.25].forEach(f => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    const t = audioCtx.currentTime;
+    o.type = "sine"; o.frequency.value = f;
+    o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.09, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+    o.start(t); o.stop(t + 0.9);
+  });
+}
 
 // ---- Controls (customizable + persisted) ----
 const DEFAULTS = { p1Up: "w", p1Down: "s", p2Up: "o", p2Down: "l" };
@@ -181,9 +242,27 @@ const restartEl = document.getElementById("restart");
 const hintEl    = document.querySelector("#wrap #hint");
 const gearEl    = document.getElementById("gear");
 const settingsEl= document.getElementById("settings");
+const startEl   = document.getElementById("start");
+const soundBtn  = document.getElementById("soundBtn");
 
 restartEl.addEventListener("click", reset);
+document.getElementById("startBtn").addEventListener("click", startGame);
+soundBtn.addEventListener("click", () => setSound(!soundOn));
 gearEl.addEventListener("click", () => openSettings(true));
+
+function startGame() {
+  ensureAudio();                          // unlock audio inside the gesture
+  started = true;
+  startEl.classList.add("hidden");
+  guru.nextAppear = performance.now() + randDelay();
+}
+function setSound(on) {
+  soundOn = on;
+  try { localStorage.setItem("pong.guru.sound", on ? "on" : "off"); } catch (e) {}
+  if (on) ensureAudio();
+  updateSoundBtn();
+}
+function updateSoundBtn() { soundBtn.textContent = (soundOn ? "🔊" : "🔇") + " Sound"; }
 document.getElementById("closeSettings").addEventListener("click", () => openSettings(false));
 document.getElementById("resetCtrl").addEventListener("click", () => {
   controls = { ...DEFAULTS }; saveControls(); capturing = null; refreshKeyButtons(); updateHint();
@@ -284,6 +363,7 @@ function bounce(p, side) {
   ball.vx *= 1.05;
   ball.vx = Math.max(-13, Math.min(13, ball.vx));
   lastToucher = side;
+  playPaddle();
 }
 
 // ---- Guru effects ----
@@ -314,7 +394,7 @@ function clearEffect() {
 }
 
 function update(now) {
-  if (paused || !running) return;
+  if (!started || paused || !running) return;
 
   if (effect && now >= effect.until) clearEffect();
 
@@ -358,7 +438,9 @@ function update(now) {
       guru.hitAt = now;
       guru.visible = false;
       guru.nextAppear = now + randDelay();
+      shakeUntil = now + 300;            // small screen shake on chaos
       applyEffect(now);
+      playGuru();
     }
   }
 
@@ -369,6 +451,7 @@ function update(now) {
 
 function afterScore(dir) {
   updateScore();
+  playScore();
   if (scoreL >= WIN_SCORE || scoreR >= WIN_SCORE) {
     running = false;
     if (effect) clearEffect();
@@ -383,6 +466,16 @@ function afterScore(dir) {
 function draw(now) {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, W, H);
+
+  // small screen shake while Guru Chaos triggers
+  let sx = 0, sy = 0;
+  if (shakeUntil > now) {
+    const m = 4 * ((shakeUntil - now) / 300);
+    sx = (Math.random() * 2 - 1) * m;
+    sy = (Math.random() * 2 - 1) * m;
+  }
+  ctx.save();
+  ctx.translate(sx, sy);
 
   // center line
   ctx.fillStyle = "#fff";
@@ -427,6 +520,8 @@ function draw(now) {
     ctx.restore();
   }
 
+  ctx.restore();  // end screen-shake transform
+
   // enlightenment flash
   if (flashUntil > now) {
     ctx.save();
@@ -445,6 +540,7 @@ function loop(now) {
 
 refreshKeyButtons();
 updateHint();
+updateSoundBtn();
 reset();
 requestAnimationFrame(loop);
 </script>
